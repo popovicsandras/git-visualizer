@@ -1,0 +1,14 @@
+{
+  "name": "git-visualizer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "In-memory git graph visualizer for teaching git. No real git involved.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

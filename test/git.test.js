@@ -1,0 +1,182 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { World, run } from '../public/git/index.js';
+import { tokenize, parseOpts } from '../public/git/parse.js';
+import { layout } from '../public/layout.js';
+
+function setup() {
+  return new World({ seed: 42 });
+}
+
+/** Run commands, failing the test if any of them errors. */
+function ok(w, ...cmds) {
+  for (const c of cmds) {
+    const r = run(w, c);
+    assert.ok(r.ok, `"${c}" failed:\n${r.lines.map((l) => l.text).join('\n')}`);
+  }
+}
+
+const text = (r) => r.lines.map((l) => l.text).join('\n');
+
+test('tokenizer handles quotes and combined flags', () => {
+  assert.deepEqual(tokenize(`git commit -am "fix the 'thing'"`), ['git', 'commit', '-am', "fix the 'thing'"]);
+  const { opts } = parseOpts(['-am', 'msg'], { '-a': { key: 'a' }, '-m': { key: 'm', value: true } });
+  assert.deepEqual(opts, { a: true, m: 'msg' });
+});
+
+test('starts as a fresh clone', () => {
+  const w = setup();
+  assert.equal(w.currentBranch(), 'main');
+  assert.equal(w.local.remoteRefs.get('origin/main'), w.headId());
+  assert.equal(w.remote.branches.get('main'), w.headId());
+  const history = [...w.ancestors(w.headId())];
+  assert.equal(history.length, 3, 'main starts with three commits');
+  assert.deepEqual([...w.remote.has].sort(), history.sort(), 'same three commits on origin');
+});
+
+test('commit advances the current branch only', () => {
+  const w = setup();
+  const before = w.headId();
+  ok(w, 'git commit -m "one"');
+  assert.notEqual(w.headId(), before);
+  assert.deepEqual(w.commit(w.headId()).parents, [before]);
+  assert.equal(w.local.remoteRefs.get('origin/main'), before);
+});
+
+test('branch creation does not move HEAD; checkout -b does', () => {
+  const w = setup();
+  ok(w, 'git branch feature');
+  assert.equal(w.currentBranch(), 'main');
+  ok(w, 'git checkout -b other');
+  assert.equal(w.currentBranch(), 'other');
+  assert.equal(run(w, 'git branch feature').ok, false);
+});
+
+test('push without upstream is rejected, push -u works', () => {
+  const w = setup();
+  ok(w, 'git switch -c feature', 'git commit');
+  const r = run(w, 'git push');
+  assert.equal(r.ok, false);
+  assert.match(text(r), /has no upstream branch/);
+  ok(w, 'git push -u origin feature');
+  assert.equal(w.remote.branches.get('feature'), w.headId());
+  assert.equal(w.local.upstream.get('feature'), 'origin/feature');
+});
+
+test('rejected push, then pull --rebase, then push succeeds', () => {
+  const w = setup();
+  ok(w, 'remote commit main -m teammate', 'git commit -m mine');
+  const mine = w.headId();
+  const r = run(w, 'git push');
+  assert.equal(r.ok, false);
+  assert.match(text(r), /rejected.*fetch first/);
+
+  ok(w, 'git pull --rebase');
+  const head = w.headId();
+  assert.notEqual(head, mine, 'rebase must create a new commit');
+  assert.equal(w.commit(head).copiedFrom, mine);
+  assert.equal(w.commit(head).parents[0], w.remote.branches.get('main'));
+  assert.ok(!w.reachable('local').has(mine), 'original commit becomes unreachable');
+
+  ok(w, 'git push');
+  assert.equal(w.remote.branches.get('main'), head);
+});
+
+test('pull fast-forwards when there is nothing local', () => {
+  const w = setup();
+  ok(w, 'remote commit', 'git pull');
+  assert.equal(w.headId(), w.remote.branches.get('main'));
+  assert.equal(w.commit(w.headId()).parents.length, 1);
+});
+
+test('pull with diverged history creates a merge commit', () => {
+  const w = setup();
+  ok(w, 'remote commit', 'git commit', 'git pull');
+  assert.equal(w.commit(w.headId()).parents.length, 2);
+  ok(w, 'git push');
+});
+
+test('checkout -b, commit, rebase main', () => {
+  const w = setup();
+  ok(w, 'git checkout -b feature', 'git commit -m f1', 'git commit -m f2', 'git checkout main', 'git commit -m m1');
+  const m1 = w.headId();
+  ok(w, 'git checkout feature', 'git rebase main');
+  const log = w.range(m1, w.headId()).map((id) => w.commit(id).message);
+  assert.deepEqual(log, ['f1', 'f2']);
+  assert.ok(w.isAncestor(m1, w.headId()));
+  assert.match(text(run(w, 'git rebase main')), /up to date/);
+});
+
+test('merge: fast-forward, then a true merge', () => {
+  const w = setup();
+  ok(w, 'git checkout -b feature', 'git commit', 'git checkout main', 'git merge feature');
+  assert.equal(w.headId(), w.local.branches.get('feature'));
+  ok(w, 'git checkout feature', 'git commit', 'git checkout main', 'git commit', 'git merge feature');
+  assert.equal(w.commit(w.headId()).parents.length, 2);
+});
+
+test('detached HEAD commits are reported as left behind', () => {
+  const w = setup();
+  ok(w, 'git commit', 'git checkout HEAD~1');
+  assert.equal(w.currentBranch(), null);
+  ok(w, 'git commit -m lost');
+  const r = run(w, 'git switch main');
+  assert.match(text(r), /leaving 1 commit behind/);
+});
+
+test('fetch updates origin/* but not local branches', () => {
+  const w = setup();
+  const main = w.headId();
+  ok(w, 'remote commit', 'remote branch hotfix', 'git fetch');
+  assert.equal(w.local.branches.get('main'), main);
+  assert.equal(w.local.remoteRefs.get('origin/main'), w.remote.branches.get('main'));
+  assert.ok(w.local.remoteRefs.has('origin/hotfix'));
+  ok(w, 'git checkout hotfix');
+  assert.equal(w.local.upstream.get('hotfix'), 'origin/hotfix');
+});
+
+test('force push overwrites remote history', () => {
+  const w = setup();
+  ok(w, 'git commit', 'git push', 'git reset --hard HEAD~1', 'git commit -m other');
+  assert.equal(run(w, 'git push').ok, false);
+  ok(w, 'git push -f');
+  assert.equal(w.remote.branches.get('main'), w.headId());
+});
+
+test('branch -d refuses unmerged branches, -D forces', () => {
+  const w = setup();
+  ok(w, 'git checkout -b tmp', 'git commit', 'git checkout main');
+  assert.equal(run(w, 'git branch -d tmp').ok, false);
+  ok(w, 'git branch -D tmp');
+  assert.ok(!w.local.branches.has('tmp'));
+});
+
+test('undo restores the previous state; errors do not create undo steps', () => {
+  const w = setup();
+  const start = w.headId();
+  ok(w, 'git commit');
+  run(w, 'git checkout nope');
+  ok(w, 'undo');
+  assert.equal(w.headId(), start);
+});
+
+test('unknown commands give helpful errors', () => {
+  const w = setup();
+  assert.match(text(run(w, 'commit')), /Did you mean "git commit"/);
+  assert.match(text(run(w, 'git frobnicate')), /not a git command/);
+});
+
+test('layout: main stays on lane 0, columns shared across panels, lanes stable', () => {
+  const w = setup();
+  ok(w, 'git checkout -b feature', 'git commit', 'git checkout main', 'git commit', 'git push');
+  const a = layout(w);
+  const lanes = new Map(a.local.nodes.map((n) => [n.id, n.lane]));
+  assert.equal(lanes.get(w.local.branches.get('main')), 0);
+  assert.equal(lanes.get(w.local.branches.get('feature')), 1);
+  for (const n of a.remote.nodes) {
+    assert.equal(n.col, a.local.nodes.find((m) => m.id === n.id).col);
+  }
+  ok(w, 'git checkout feature', 'git commit');
+  const b = layout(w);
+  for (const n of a.local.nodes) assert.equal(b.local.nodes.find((m) => m.id === n.id).lane, n.lane);
+});

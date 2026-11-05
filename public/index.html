@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Git Visualizer</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='9' cy='8' r='4' fill='%2358a6ff'/%3E%3Ccircle cx='9' cy='24' r='4' fill='%2358a6ff'/%3E%3Ccircle cx='23' cy='14' r='4' fill='%233fb950'/%3E%3Cpath d='M9 12v8M9 18c0-4 14-0 14-4' stroke='%23c9d1d9' stroke-width='2' fill='none'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <h1>Git Visualizer</h1>
+        <span class="tagline">a teaching sandbox · nothing here runs real git</span>
+      </div>
+      <ul class="legend" aria-label="Legend">
+        <li><span class="sw dot"></span>your commit</li>
+        <li><span class="sw square"></span>teammate commit</li>
+        <li><span class="sw ghost"></span>unreachable</li>
+        <li><span class="sw pill current">HEAD → main</span>checked out</li>
+        <li><span class="sw pill tracking">origin/main</span>last known remote position</li>
+      </ul>
+      <div class="actions">
+        <button type="button" id="btn-teammate" title="Simulate a teammate pushing a commit to origin/main">Teammate pushes to main</button>
+        <button type="button" id="btn-undo" title="Undo the last state-changing command">Undo</button>
+        <button type="button" id="btn-reset" class="danger" title="Start over from a fresh clone">Reset</button>
+      </div>
+    </header>
+
+    <main class="panels">
+      <section class="panel" aria-labelledby="local-title">
+        <div class="panel-head">
+          <h2 id="local-title"><span class="badge local">LOCAL</span> your machine</h2>
+          <span class="meta" id="local-meta"></span>
+        </div>
+        <div class="scroll" id="scroll-local"><svg id="svg-local" role="img" aria-label="Local commit graph"></svg></div>
+      </section>
+      <section class="panel remote" aria-labelledby="remote-title">
+        <div class="panel-head">
+          <h2 id="remote-title"><span class="badge remote">REMOTE</span> origin</h2>
+          <span class="meta" id="remote-meta"></span>
+        </div>
+        <div class="scroll" id="scroll-remote"><svg id="svg-remote" role="img" aria-label="Remote commit graph"></svg></div>
+      </section>
+    </main>
+
+    <section class="terminal" aria-label="Command line">
+      <div class="output" id="output" role="log" aria-live="polite"></div>
+      <form class="prompt" id="prompt" autocomplete="off">
+        <label for="cmd" class="ps1" id="ps1"></label>
+        <input id="cmd" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder='try: git checkout -b feature' autofocus />
+      </form>
+    </section>
+  </body>
+</html>
