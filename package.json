@@ -5,11 +5,23 @@
   "description": "In-memory git graph visualizer for teaching git. No real git involved.",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
+    "start": "node --disallow-code-generation-from-strings --config-file=node.config.json server.js",
     "test": "node --test"
   },
   "engines": {
     "node": ">=26.13.0",
     "npm": ">=12.2.2"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=26.13.0",
+      "onFail": "error"
+    },
+    "packageManager": {
+      "name": "npm",
+      "version": ">=12.2.2",
+      "onFail": "error"
+    }
   }
 }

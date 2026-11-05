@@ -1,0 +1,11 @@
+{
+  "$schema": "https://nodejs.org/dist/latest-v26.x/docs/node-config-schema.json",
+  "nodeOptions": {
+    "disable-proto": "throw",
+    "disable-sigusr1": true
+  },
+  "permission": {
+    "allow-fs-read": ["./public"],
+    "allow-net": true
+  }
+}
