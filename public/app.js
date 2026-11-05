@@ -1,12 +1,13 @@
 import { World, run, GIT_COMMANDS } from './git/index.js';
 import { layout } from './layout.js';
 import { renderPanel, columnWidth } from './render.js';
+import { LinkedPanZoom } from './pan-zoom.js';
 
 const $ = (id) => document.getElementById(id);
 const svgLocal = $('svg-local');
 const svgRemote = $('svg-remote');
-const scrollLocal = $('scroll-local');
-const scrollRemote = $('scroll-remote');
+const viewLocal = $('view-local');
+const viewRemote = $('view-remote');
 const output = $('output');
 const input = $('cmd');
 const ps1 = $('ps1');
@@ -66,28 +67,23 @@ function draw({ follow = true } = {}) {
   updateMeta();
   // Give each panel vertical space in proportion to how tall its graph is.
   const head = document.querySelector('.panel-head').offsetHeight + 2;
-  const hl = Number(svgLocal.getAttribute('height')) + head;
-  const hr = Number(svgRemote.getAttribute('height')) + head;
+  const hl = prev.local.height + head;
+  const hr = prev.remote.height + head;
   document.querySelector('.panels').style.gridTemplateRows = `minmax(0, ${hl}fr) minmax(0, ${hr}fr)`;
-  if (follow) {
-    // Keep the newest commits in view.
-    scrollLocal.scrollLeft = scrollLocal.scrollWidth;
-    scrollRemote.scrollLeft = scrollRemote.scrollWidth;
-  }
+  camera.setContent(0, prev.local.root, prev.local.width, prev.local.height);
+  camera.setContent(1, prev.remote.root, prev.remote.width, prev.remote.height);
+  if (follow) camera.follow(); // keep the newest commits in view
 }
 
-// Keep both panels horizontally aligned so a commit sits at the same x in both.
-let syncing = false;
-function syncScroll(from, to) {
-  from.addEventListener('scroll', () => {
-    if (syncing) return;
-    syncing = true;
-    to.scrollLeft = from.scrollLeft;
-    requestAnimationFrame(() => (syncing = false));
-  });
-}
-syncScroll(scrollLocal, scrollRemote);
-syncScroll(scrollRemote, scrollLocal);
+// Pan / pinch / zoom. Horizontal pan and zoom are shared so commits stay aligned.
+const zoomLevel = $('zoom-level');
+const camera = new LinkedPanZoom([viewLocal, viewRemote], {
+  onChange: (k) => (zoomLevel.textContent = `${Math.round(k * 100)}%`),
+});
+$('zoom-in').addEventListener('click', () => camera.zoomBy(1.25));
+$('zoom-out').addEventListener('click', () => camera.zoomBy(0.8));
+$('zoom-level').addEventListener('click', () => camera.reset());
+$('zoom-fit').addEventListener('click', () => camera.fit());
 
 // ---- console ---------------------------------------------------------------
 
@@ -115,6 +111,7 @@ function welcome() {
     { kind: 'note', text: 'Try: git checkout -b feature → git commit → git push -u origin feature' },
     { kind: 'note', text: 'Use "remote commit" (or the button above) to make a teammate push, then try pull / rebase.' },
     { kind: 'note', text: 'Type "help" for every command. ↑/↓ = history, Tab = complete, click a commit to insert its hash.' },
+    { kind: 'note', text: 'Graphs: drag or two-finger scroll to pan, pinch or ⌘/Ctrl+scroll to zoom, double-click to fit.' },
   ]);
 }
 
@@ -221,6 +218,7 @@ $('btn-reset').addEventListener('click', () => {
   prev = { local: null, remote: null };
   output.replaceChildren();
   welcome();
+  camera.reset();
   draw();
   input.focus();
 });

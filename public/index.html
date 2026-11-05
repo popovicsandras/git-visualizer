@@ -13,14 +13,11 @@
       <div class="brand">
         <span class="logo" aria-hidden="true"></span>
         <h1>Git Visualizer</h1>
-        <span class="tagline">a teaching sandbox · nothing here runs real git</span>
       </div>
       <ul class="legend" aria-label="Legend">
-        <li><span class="sw dot"></span>your commit</li>
-        <li><span class="sw square"></span>teammate commit</li>
-        <li><span class="sw ghost"></span>unreachable</li>
         <li><span class="sw pill current">HEAD → main</span>checked out</li>
         <li><span class="sw pill tracking">origin/main</span>last known remote position</li>
+        <li><span class="sw ghost"></span>unreachable</li>
       </ul>
       <div class="actions">
         <button type="button" id="btn-teammate" title="Simulate a teammate pushing a commit to origin/main">Teammate pushes to main</button>
@@ -34,15 +31,21 @@
         <div class="panel-head">
           <h2 id="local-title"><span class="badge local">LOCAL</span> your machine</h2>
           <span class="meta" id="local-meta"></span>
+          <div class="zoom" role="group" aria-label="Zoom both graphs">
+            <button type="button" id="zoom-out" title="Zoom out (both graphs)" aria-label="Zoom out">−</button>
+            <button type="button" id="zoom-level" class="level" title="Reset to 100%">100%</button>
+            <button type="button" id="zoom-in" title="Zoom in (both graphs)" aria-label="Zoom in">+</button>
+            <button type="button" id="zoom-fit" title="Fit both graphs (or double-click a graph)">Fit</button>
+          </div>
         </div>
-        <div class="scroll" id="scroll-local"><svg id="svg-local" role="img" aria-label="Local commit graph"></svg></div>
+        <div class="viewport" id="view-local"><svg id="svg-local" role="img" aria-label="Local commit graph"></svg></div>
       </section>
       <section class="panel remote" aria-labelledby="remote-title">
         <div class="panel-head">
           <h2 id="remote-title"><span class="badge remote">REMOTE</span> origin</h2>
           <span class="meta" id="remote-meta"></span>
         </div>
-        <div class="scroll" id="scroll-remote"><svg id="svg-remote" role="img" aria-label="Remote commit graph"></svg></div>
+        <div class="viewport" id="view-remote"><svg id="svg-remote" role="img" aria-label="Remote commit graph"></svg></div>
       </section>
     </main>
 

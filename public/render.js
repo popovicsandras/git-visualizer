@@ -6,7 +6,7 @@ const R = 11; // node radius
 const PAD_X = 48;
 const PAD_TOP = 10;
 const LABEL_H = 20;
-const LABEL_GAP = 4;
+const LABEL_GAP = 8;
 const BELOW = 32; // room for hash + message under a node
 const LANE_GAP = 8;
 const CHAR_W = 7.3; // approx. width of a 12px monospace character
@@ -39,7 +39,8 @@ function truncate(str, width) {
 
 /**
  * Render a panel. `prev` holds what was drawn last time ({ nodes:Set, labels:Map })
- * so new commits and moved labels can be animated. Returns the new `prev`.
+ * so new commits and moved labels can be animated. Returns the new `prev` plus
+ * the root group and the content size, for the pan/zoom controller.
  */
 export function renderPanel(svg, lay, { columns, colW, prev, onNodeClick }) {
   svg.replaceChildren();
@@ -56,18 +57,19 @@ export function renderPanel(svg, lay, { columns, colW, prev, onNodeClick }) {
   }
   const width = PAD_X * 2 + Math.max(0, columns - 1) * colW + colW / 2;
   const height = Math.max(top, 120);
-  svg.setAttribute('width', width);
-  svg.setAttribute('height', height);
-  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
 
+  // Everything goes into one group that the pan/zoom controller transforms.
+  const root = el('g', { class: 'camera' }, svg);
   const pos = new Map(lay.nodes.map((n) => [n.id, { x: PAD_X + n.col * colW, y: laneY[n.lane], lane: n.lane }]));
 
-  // Lane guides
-  const guides = el('g', { class: 'guides' }, svg);
-  for (let L = 0; L < lay.lanes; L++) el('line', { x1: 0, x2: width, y1: laneY[L], y2: laneY[L], class: 'guide' }, guides);
+  // Lane guides (extend past the content so panning never shows their ends)
+  const guides = el('g', { class: 'guides' }, root);
+  for (let L = 0; L < lay.lanes; L++) {
+    el('line', { x1: -10000, x2: width + 10000, y1: laneY[L], y2: laneY[L], class: 'guide' }, guides);
+  }
 
   // Edges
-  const edges = el('g', { class: 'edges' }, svg);
+  const edges = el('g', { class: 'edges' }, root);
   for (const e of lay.edges) {
     const a = pos.get(e.from);
     const b = pos.get(e.to);
@@ -94,8 +96,8 @@ export function renderPanel(svg, lay, { columns, colW, prev, onNodeClick }) {
   }
 
   // Nodes
-  const nodesG = el('g', { class: 'nodes' }, svg);
-  const labelsG = el('g', { class: 'labels' }, svg);
+  const nodesG = el('g', { class: 'nodes' }, root);
+  const labelsG = el('g', { class: 'labels' }, root);
   const seen = new Set();
   const labelMap = new Map();
   for (const n of lay.nodes) {
@@ -140,5 +142,5 @@ export function renderPanel(svg, lay, { columns, colW, prev, onNodeClick }) {
       labelMap.set(l.ref, n.id);
     });
   }
-  return { nodes: seen, labels: labelMap };
+  return { nodes: seen, labels: labelMap, root, width, height };
 }
