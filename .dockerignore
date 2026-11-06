@@ -1,0 +1,8 @@
+# Send Docker only the files the Dockerfile copies (an allowlist, so new files
+# such as .env or local notes never end up in the build context by accident).
+*
+!package.json
+!node.config.json
+!server.js
+!server/
+!public/

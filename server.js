@@ -6,6 +6,12 @@ const PORT = Number(process.env.PORT) || 5173;
 const HOST = process.env.HOST || '127.0.0.1';
 
 const server = createAppServer();
+
+// In a container (see Dockerfile) node is PID 1, and PID 1 ignores SIGTERM unless
+// the process exits itself, so every stop or redeploy would wait for a SIGKILL.
+// Sessions live only in memory, so there is nothing to save first.
+process.on('SIGTERM', () => process.exit(0));
+
 server.listen(PORT, HOST, () => {
   console.log(`git-visualizer running at http://${HOST}:${PORT}`);
   if (HOST === '0.0.0.0' || HOST === '::') {

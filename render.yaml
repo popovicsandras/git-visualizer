@@ -1,0 +1,13 @@
+# Render Blueprint: in the Render dashboard choose New > Blueprint and pick this
+# repository. Reference: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: git-visualizer
+    runtime: docker # builds ./Dockerfile
+    plan: free
+    region: frankfurt # can't be changed after the service is created
+    branch: main
+    healthCheckPath: /
+    # Deploy a push to main only after its GitHub checks pass
+    # (.github/workflows/test.yml).
+    autoDeployTrigger: checksPass

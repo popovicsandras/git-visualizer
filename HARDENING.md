@@ -77,3 +77,29 @@ active Node or npm is older than the versions listed. This was checked on
 npm 10.9 / Node 22: both `npm install` and `npm test` refuse to run. That
 matters because older npm versions silently ignore most of the `.npmrc`
 policies. Run `nvm use` (it reads `.nvmrc`) to switch to Node 26.
+
+## Hosting: Dockerfile, Render and CI
+
+The app is hosted on [Render](https://render.com)'s free tier, built from the
+[Dockerfile](Dockerfile) and configured in [render.yaml](render.yaml). The test
+workflow ([.github/workflows/test.yml](.github/workflows/test.yml)) runs on
+every push to `main`, and Render deploys a push only after those checks pass.
+
+- **Stock Node 26 ships npm 11.** Node 26.13.0 bundles npm 11.20, which
+  `devEngines` rejects, so the container and CI run `node` directly instead of
+  `npm start` / `npm test`. **If you change either script in package.json,
+  change the `CMD` in the Dockerfile or the `run` step in the workflow too.**
+- **Pinned versions.** The base image is pinned by tag and digest, and the
+  GitHub Actions by commit SHA, so a re-pushed tag can't change what runs.
+  When you bump Node, update `.nvmrc` and the Dockerfile together.
+- **In the container:** the server runs as the unprivileged `node` user, and
+  the app files are owned by root, so it can't modify them. Only the files the
+  server needs are copied in (`.dockerignore` is an allowlist).
+- **`HOST=0.0.0.0` is set in the image**, because the container is reached
+  through Render's proxy. Render terminates TLS, so browsers connect over
+  `https`/`wss`.
+- **SIGTERM:** in a container, node is PID 1, which ignores SIGTERM unless it
+  is handled, so `server.js` exits on it. Without the handler, every redeploy
+  waited for a SIGKILL.
+- **Sessions are wiped on every deploy and restart** (they live in memory),
+  and also when the free instance sleeps after 15 minutes without traffic.

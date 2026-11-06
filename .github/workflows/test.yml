@@ -1,0 +1,34 @@
+# Runs the tests on every push to main and on every pull request.
+# Render deploys a push to main only after this passes (autoDeployTrigger:
+# checksPass in render.yaml). A commit with no checks at all isn't deployed
+# either, so keep this running on every push to main.
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Actions are pinned to commit SHAs, so a moved tag can't change what runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          # On by default because devEngines names npm, but there's no lockfile
+          # and nothing to install, so caching would only fail the job.
+          package-manager-cache: false
+
+      # The same as `npm test`. npm isn't used: Node 26.13 ships npm 11.20, older
+      # than package.json's devEngines requires, so npm would refuse to run.
+      - run: node --test
