@@ -1,7 +1,9 @@
-import { World, run, GIT_COMMANDS, MAIN_WORKTREE, isValidBranchName, relativePath } from './git/index.js';
+import { World, GIT_COMMANDS, MAIN_WORKTREE, isValidBranchName, relativePath } from './git/index.js';
 import { layout } from './layout.js';
 import { renderPanel, columnWidth } from './render.js';
 import { LinkedPanZoom } from './pan-zoom.js';
+import { SessionClient } from './net.js';
+import { initials } from './people.js';
 
 const $ = (id) => document.getElementById(id);
 const svgLocal = $('svg-local');
@@ -12,7 +14,11 @@ const output = $('output');
 const input = $('cmd');
 const ps1 = $('ps1');
 
-let world = new World();
+// The server runs every command; `world` is a read-only mirror of what it last sent
+// (your repository plus the session's shared origin), used for drawing and Tab completion.
+let world = null;
+let me = null; // { id, name }
+let sessionCode = null;
 let prev = { local: null, remote: null };
 const cmdHistory = [];
 let historyIdx = 0;
@@ -60,11 +66,13 @@ function updateMeta() {
 }
 
 function draw({ follow = true } = {}) {
+  if (!world) return;
   const lay = layout(world);
   const colW = columnWidth([lay.local, lay.remote]);
   const insertRef = (n) => insertAtCursor(n.id);
-  prev.local = renderPanel(svgLocal, lay.local, { columns: lay.columns, colW, prev: prev.local, onNodeClick: insertRef });
-  prev.remote = renderPanel(svgRemote, lay.remote, { columns: lay.columns, colW, prev: prev.remote, onNodeClick: insertRef });
+  const opts = { columns: lay.columns, colW, me: me.name, onNodeClick: insertRef };
+  prev.local = renderPanel(svgLocal, lay.local, { ...opts, prev: prev.local });
+  prev.remote = renderPanel(svgRemote, lay.remote, { ...opts, prev: prev.remote });
   updateMeta();
   renderWorktrees();
   // Give each panel vertical space in proportion to how tall its graph is.
@@ -360,7 +368,7 @@ wtForm.addEventListener('submit', (e) => {
   const folder = `../${wtFolder.value.trim()}`;
   wtDialog.close();
   // Then step into the new folder, as you would after creating it.
-  if (execute(cmd)) execute(`cd ${folder}`);
+  execute(cmd).then((ok) => ok && execute(`cd ${folder}`));
 });
 $('wt-new').addEventListener('click', openCreateWorktree);
 closeOnBackdrop(wtDialog);
@@ -394,7 +402,8 @@ function print(lines) {
   for (const l of lines) {
     const div = document.createElement('div');
     div.className = `line ${l.kind}`;
-    div.textContent = l.text;
+    if (l.who) div.append(span(l.who, 'who'), ' ');
+    div.append(l.text);
     output.appendChild(div);
   }
   output.scrollTop = output.scrollHeight;
@@ -407,35 +416,91 @@ function echo(cmd) {
   output.appendChild(div);
 }
 
-function welcome() {
-  print([
-    { kind: 'heading', text: 'Welcome! This is a freshly cloned repo: three commits on main, also on origin.' },
-    { kind: 'note', text: 'Type git commands below. Only the graph changes: no files, no real git.' },
+function printWelcome({ created, resumed }) {
+  const tips = [
+    { kind: 'note', text: 'Type git commands below. Only the graphs change: no files, no real git.' },
     { kind: 'note', text: 'Try: git checkout -b feature → git commit → git push -u origin feature' },
-    { kind: 'note', text: 'Use "remote commit" (or the button above) to make a teammate push, then try pull / rebase.' },
+    {
+      kind: 'note',
+      text: "When anyone pushes, the REMOTE panel changes for everyone at once. Your origin/* labels only move when you git fetch or git pull, like in real git.",
+    },
+    { kind: 'note', text: "Round commits are yours; square ones are a teammate's (hover for the author)." },
     { kind: 'note', text: 'Worktrees (left sidebar) give a branch its own folder: try "+ New worktree", then click a card (or cd) to switch.' },
     { kind: 'note', text: 'Type "help" for every command. ↑/↓ = history, Tab = complete, click a commit to insert its hash.' },
     { kind: 'note', text: 'Graphs: drag or two-finger scroll to pan, pinch or ⌘/Ctrl+scroll to zoom, double-click to fit.' },
-  ]);
+  ];
+  if (resumed) {
+    print([{ kind: 'heading', text: `Welcome back, ${me.name}. Your repository is as you left it.` }, tips[2], tips[5]]);
+  } else if (created) {
+    print([
+      { kind: 'heading', text: `You started session ${sessionCode}: a fresh repo with three commits on main, also on origin.` },
+      { kind: 'note', text: 'Invite teammates with the session button at the top. Each of them gets their own clone of this origin.' },
+      ...tips,
+    ]);
+  } else {
+    print([{ kind: 'heading', text: `You joined session ${sessionCode} as ${me.name}. This is your own fresh clone of its origin.` }, ...tips]);
+  }
 }
 
-function execute(cmd) {
+// Commands run one at a time, in order: echo, wait for the server, print. Activity
+// from teammates that arrives meanwhile waits until the output is printed.
+let queue = Promise.resolve();
+let busy = false;
+let deferred = [];
+
+/** Run a command line on the server. Resolves to whether it succeeded. */
+function execute(cmd, { record = true } = {}) {
+  const job = queue.then(() => runCommand(cmd, record));
+  queue = job.catch(() => {});
+  return job;
+}
+
+async function runCommand(cmd, record) {
   echo(cmd);
-  if (cmd.trim()) {
-    if (cmdHistory[cmdHistory.length - 1] !== cmd) cmdHistory.push(cmd);
-  }
+  if (record && cmd.trim() && cmdHistory[cmdHistory.length - 1] !== cmd) cmdHistory.push(cmd);
   historyIdx = cmdHistory.length;
-  let res;
+  if (!cmd.trim()) return true;
+  return request(() => client.command(cmd));
+}
+
+async function request(send) {
+  busy = true;
+  document.body.classList.add('busy');
   try {
-    res = run(world, cmd);
+    const res = await send();
+    if (res.clear) output.replaceChildren();
+    print(res.lines);
+    applyState(res.state);
+    return res.ok;
   } catch (e) {
-    console.error(e);
-    res = { lines: [{ kind: 'err', text: `internal error: ${e.message}` }], ok: false };
+    print([{ kind: 'err', text: e.message }]);
+    return false;
+  } finally {
+    busy = false;
+    document.body.classList.remove('busy');
+    const later = deferred;
+    deferred = [];
+    for (const f of later) f();
   }
-  if (res.clear) output.replaceChildren();
-  print(res.lines);
-  draw();
-  return res.ok;
+}
+
+function applyState(state, { follow = true } = {}) {
+  world = World.fromView(state, { author: me.name, shared: true });
+  draw({ follow });
+}
+
+let explainedFetch = false;
+function showActivity({ who, items }) {
+  const lines = items.map((text) => ({ kind: 'activity', who, text }));
+  if (!explainedFetch && items.some((t) => / origin/.test(t))) {
+    explainedFetch = true;
+    lines.push({
+      kind: 'note',
+      text: 'The REMOTE panel already shows it. Your origin/* branches catch up when you run "git fetch" (or "git pull").',
+    });
+  }
+  if (busy) deferred.push(() => print(lines));
+  else print(lines);
 }
 
 $('prompt').addEventListener('submit', (e) => {
@@ -460,22 +525,16 @@ function completions(value) {
   const word = parts[parts.length - 1];
   let pool;
   const otherFolders = () => world.otherWorktrees().map((t) => relativePath(t.path, world.cwd));
-  if (parts.length === 1) pool = ['git', 'help', 'undo', 'clear', 'remote', 'cd', 'pwd'];
+  if (!world) return { word, matches: [] };
+  if (parts.length === 1) pool = ['git', 'help', 'undo', 'clear', 'cd', 'pwd'];
   else if (parts.length === 2 && parts[0] === 'cd') pool = [...otherFolders(), '-'];
   else if (parts.length === 2 && parts[0] === 'git') pool = GIT_COMMANDS;
-  else if (parts.length === 2 && parts[0] === 'remote') pool = ['commit', 'branch'];
   else if (parts.length === 3 && parts[1] === 'worktree') pool = ['add', 'list', 'remove'];
   else if (parts[1] === 'worktree' && parts[2] === 'remove') {
     pool = world.otherWorktrees().filter((t) => t.path !== MAIN_WORKTREE).map((t) => relativePath(t.path, world.cwd));
   }
   else {
-    pool = [
-      ...world.local.branches.keys(),
-      ...world.local.remoteRefs.keys(),
-      ...(parts[0] === 'remote' ? world.remote.branches.keys() : []),
-      'origin',
-      'HEAD',
-    ];
+    pool = [...world.local.branches.keys(), ...world.local.remoteRefs.keys(), 'origin', 'HEAD'];
   }
   return { word, matches: [...new Set(pool)].filter((c) => c.startsWith(word)).sort() };
 }
@@ -516,24 +575,269 @@ document.querySelector('.terminal').addEventListener('mouseup', () => {
 
 // ---- buttons ---------------------------------------------------------------
 
-$('btn-teammate').addEventListener('click', () => {
-  execute('remote commit main');
-  input.focus();
-});
 $('btn-undo').addEventListener('click', () => {
   execute('undo');
   input.focus();
 });
 $('btn-reset').addEventListener('click', () => {
-  world = new World();
-  prev = { local: null, remote: null };
-  output.replaceChildren();
-  welcome();
-  camera.reset();
-  draw();
+  // Re-clone: replace your repository with a fresh clone of origin (undo brings it back).
+  const job = queue.then(() => request(() => client.reclone()));
+  queue = job.catch(() => {});
   input.focus();
 });
+$('btn-leave').addEventListener('click', () => {
+  const code = sessionCode;
+  client.leave();
+  forgetToken(code); // don't jump straight back in on reload
+  showLobby({ code });
+});
 
-welcome();
-draw();
-input.focus();
+// ---- people + invite ---------------------------------------------------------
+
+function renderPeople(list) {
+  const rank = (p) => (p.id === me.id ? 0 : p.online ? 1 : 2);
+  const sorted = [...list].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  $('people').replaceChildren(
+    ...sorted.map((p) => {
+      const li = document.createElement('li');
+      const you = p.id === me.id;
+      li.className = `person${p.online ? ' online' : ''}${you ? ' me' : ''}`;
+      li.title = `${p.name}${you ? ' (you)' : ''}: ${p.online ? 'online' : 'offline'}`;
+      li.setAttribute('aria-label', li.title);
+      li.append(span(initials(p.name), 'avatar'));
+      return li;
+    }),
+  );
+}
+
+const inviteDialog = $('invite-dialog');
+const inviteCopy = $('invite-copy');
+const isLoopback = (host) => ['localhost', '127.0.0.1', '[::1]'].includes(host) || host.endsWith('.localhost');
+
+function openInvite({ created = false } = {}) {
+  $('invite-title').textContent = created ? 'Your session is ready' : 'Invite people';
+  $('invite-link').value = linkFor(sessionCode);
+  $('invite-code').textContent = sessionCode;
+  $('invite-host').textContent = location.host;
+  $('invite-local').hidden = !isLoopback(location.hostname);
+  inviteCopy.textContent = 'Copy link';
+  inviteDialog.showModal();
+  inviteCopy.focus();
+}
+
+inviteCopy.addEventListener('click', async () => {
+  const field = $('invite-link');
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(field.value);
+    copied = true;
+  } catch {
+    // The async clipboard needs a secure context (https or localhost); fall back to selecting.
+    field.focus();
+    field.select();
+    try {
+      copied = document.execCommand('copy');
+    } catch {}
+  }
+  inviteCopy.textContent = copied ? 'Copied!' : 'Press Ctrl/⌘+C';
+  setTimeout(() => (inviteCopy.textContent = 'Copy link'), 1800);
+});
+$('invite-link').addEventListener('focus', (e) => e.target.select());
+$('btn-invite').addEventListener('click', () => openInvite());
+closeOnBackdrop(inviteDialog);
+
+// ---- session lifecycle -------------------------------------------------------
+
+const client = new SessionClient({
+  onState: (state) => world && applyState(state),
+  onPeople: (list) => me && renderPeople(list),
+  onActivity: (msg) => me && showActivity(msg),
+  onStatus(status, welcome) {
+    $('conn-banner').hidden = status !== 'reconnecting';
+    if (status === 'online' && welcome) {
+      enterSession(welcome, { reconnect: true });
+      print([{ kind: 'note', text: 'Reconnected.' }]);
+    }
+  },
+  onLost(err) {
+    const code = sessionCode;
+    forgetToken(code);
+    showLobby({ code, error: err.message });
+  },
+});
+
+const NAME_KEY = 'git-visualizer:name';
+// Per tab (sessionStorage): a reload rejoins as you, while a second tab can join as someone else.
+const tokenKey = (code) => `git-visualizer:token:${code}`;
+function readToken(code) {
+  try {
+    return JSON.parse(sessionStorage.getItem(tokenKey(code)) ?? 'null');
+  } catch {
+    return null;
+  }
+}
+function saveToken(code, value) {
+  try {
+    sessionStorage.setItem(tokenKey(code), JSON.stringify(value));
+  } catch {}
+}
+function forgetToken(code) {
+  try {
+    if (code) sessionStorage.removeItem(tokenKey(code));
+  } catch {}
+}
+
+const linkFor = (code) => `${location.origin}/?session=${code}`;
+
+/** The session code in a pasted link or typed code, or null. */
+function parseCode(text) {
+  let candidate = text.trim();
+  try {
+    candidate = new URL(candidate).searchParams.get('session') ?? '';
+  } catch {}
+  const bare = candidate.toLowerCase().replace(/[\s-]/g, '');
+  return /^[a-z0-9]{12}$/.test(bare) ? `${bare.slice(0, 4)}-${bare.slice(4, 8)}-${bare.slice(8)}` : null;
+}
+
+function enterSession(w, { reconnect = false } = {}) {
+  me = w.you;
+  sessionCode = w.session;
+  saveToken(sessionCode, { token: w.token, name: me.name });
+  if (new URLSearchParams(location.search).get('session') !== sessionCode) {
+    history.replaceState(null, '', `?session=${sessionCode}`);
+  }
+  document.title = `${me.name} · ${sessionCode} · Git Visualizer`;
+  $('session-code').textContent = sessionCode;
+  document.body.classList.remove('in-lobby');
+  if (!reconnect) {
+    output.replaceChildren();
+    prev = { local: null, remote: null };
+    explainedFetch = false;
+    camera.reset();
+  }
+  renderPeople(w.people);
+  applyState(w.state);
+  if (reconnect) return;
+  printWelcome(w);
+  if (w.created) openInvite({ created: true });
+  else input.focus();
+}
+
+// ---- lobby -------------------------------------------------------------------
+
+const lobbyName = $('lobby-name');
+const lobbyLink = $('lobby-link');
+const lobbyError = $('lobby-error');
+const btnCreate = $('btn-create');
+const btnJoin = $('btn-join');
+
+function showLobby({ code = null, error = '' } = {}) {
+  for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  document.body.classList.add('in-lobby');
+  document.title = 'Git Visualizer';
+  world = null;
+  me = null;
+  sessionCode = null;
+  output.replaceChildren();
+  $('conn-banner').hidden = true;
+  if (code) lobbyLink.value = linkFor(code);
+  lobbyError.textContent = error;
+  for (const f of [lobbyName, lobbyLink]) f.removeAttribute('aria-invalid');
+  updateLobbyEmphasis();
+  (lobbyName.value && lobbyLink.value ? btnJoin : lobbyName).focus();
+}
+
+/** With a link filled in, joining is the likely next step: make it the primary action. */
+function updateLobbyEmphasis() {
+  const joining = lobbyLink.value.trim() !== '';
+  $('choice-join').classList.toggle('suggested', joining);
+  btnJoin.classList.toggle('primary', joining);
+  btnCreate.classList.toggle('primary', !joining);
+}
+lobbyLink.addEventListener('input', updateLobbyEmphasis);
+
+function lobbyFail(message, field = null) {
+  lobbyError.textContent = message;
+  for (const f of [lobbyName, lobbyLink]) f.setAttribute('aria-invalid', String(f === field));
+  field?.focus();
+}
+
+let entering = false;
+async function enterFromLobby(action) {
+  if (entering) return;
+  const name = lobbyName.value.replace(/\s+/g, ' ').trim();
+  if (!name) return lobbyFail('Enter your name first.', lobbyName);
+  let code = null;
+  if (action === 'join') {
+    if (!lobbyLink.value.trim()) return lobbyFail('Paste the session link or code you were sent.', lobbyLink);
+    code = parseCode(lobbyLink.value);
+    if (!code) return lobbyFail("That doesn't look like a session link or code.", lobbyLink);
+  }
+  try {
+    localStorage.setItem(NAME_KEY, name);
+  } catch {}
+  entering = true;
+  document.body.classList.add('entering');
+  lobbyFail('');
+  try {
+    let w;
+    if (action === 'create') {
+      w = await client.create(name);
+    } else {
+      const saved = readToken(code);
+      const token = saved && saved.name.toLowerCase() === name.toLowerCase() ? saved.token : undefined;
+      w = await client.join(code, { name, token });
+    }
+    enterSession(w);
+  } catch (e) {
+    let msg = e.message;
+    if (e.code === 'not_found') {
+      // A link copied from another address of this server won't help; say where it points.
+      try {
+        const origin = new URL(lobbyLink.value.trim()).origin;
+        if (origin !== location.origin) msg += ` (That link is for ${origin}; try opening it directly.)`;
+      } catch {}
+    }
+    lobbyFail(msg, ['invalid_name', 'name_taken'].includes(e.code) ? lobbyName : action === 'join' ? lobbyLink : null);
+  } finally {
+    entering = false;
+    document.body.classList.remove('entering');
+  }
+}
+
+btnCreate.addEventListener('click', () => enterFromLobby('create'));
+btnJoin.addEventListener('click', () => enterFromLobby('join'));
+lobbyName.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  enterFromLobby(lobbyLink.value.trim() ? 'join' : 'create');
+});
+lobbyLink.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  enterFromLobby('join');
+});
+$('lobby-form').addEventListener('submit', (e) => e.preventDefault());
+
+// ---- start -------------------------------------------------------------------
+
+{
+  try {
+    lobbyName.value = localStorage.getItem(NAME_KEY) ?? '';
+  } catch {}
+  const code = parseCode(new URLSearchParams(location.search).get('session') ?? '');
+  const saved = code && readToken(code);
+  if (saved) {
+    // A reload: go straight back into the session as yourself.
+    showLobby({ code });
+    client
+      .join(code, { token: saved.token })
+      .then((w) => enterSession(w))
+      .catch((e) => {
+        forgetToken(code);
+        showLobby({ code, error: e.message });
+      });
+  } else {
+    showLobby({ code });
+  }
+}

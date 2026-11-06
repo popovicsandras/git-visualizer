@@ -7,7 +7,7 @@ import * as remote from './remote.js';
 import { cd, pwd, worktree } from './worktree.js';
 
 export { World };
-export { MAIN_WORKTREE, isValidBranchName, relativePath, resolvePath } from './world.js';
+export { DEFAULT_BRANCH, MAIN_WORKTREE, REMOTE, isValidBranchName, mulberry32, relativePath, resolvePath } from './world.js';
 
 const GIT = {
   commit: local.commit,
@@ -26,12 +26,13 @@ const GIT = {
   pull: remote.pull,
   push: remote.push,
   remote: remote.remoteCmd,
-  help: () => helpLines(),
+  help: (w) => helpLines(w.shared),
 };
 
 export const GIT_COMMANDS = Object.keys(GIT);
 
-export function helpLines() {
+/** `shared`: in a session with real teammates (no teammate simulation; undo is personal). */
+export function helpLines(shared = false) {
   const rows = [
     ['Basics', ''],
     ['git commit [-m "msg"] [--amend]', 'record a new commit on the current branch'],
@@ -52,13 +53,23 @@ export function helpLines() {
     ['git fetch [--prune]', 'download origin\'s commits, update origin/* refs'],
     ['git pull [--rebase]', 'fetch + merge (or rebase) the upstream branch'],
     ['git push [-u] [origin <branch>]', 'upload commits (-f to force, --delete)'],
-    ['Simulation (not git)', ''],
-    ['remote commit [<branch>] [-m msg]', 'a teammate pushes a commit to origin'],
-    ['remote branch <name> [<from>]', 'a teammate pushes a new branch'],
-    ['cd <worktree folder>', 'move the prompt into another worktree (cd - goes back)'],
-    ['pwd', 'which worktree folder the prompt is in'],
-    ['undo', 'revert the last state-changing command'],
-    ['clear', 'clear this console  (page refresh resets everything)'],
+    ...(shared
+      ? [
+          ['Shell (not git)', ''],
+          ['cd <worktree folder>', 'move the prompt into another worktree (cd - goes back)'],
+          ['pwd', 'which worktree folder the prompt is in'],
+          ['undo', 'rewind YOUR repository by one command (origin is shared: it stays)'],
+          ['clear', 'clear this console'],
+        ]
+      : [
+          ['Simulation (not git)', ''],
+          ['remote commit [<branch>] [-m msg]', 'a teammate pushes a commit to origin'],
+          ['remote branch <name> [<from>]', 'a teammate pushes a new branch'],
+          ['cd <worktree folder>', 'move the prompt into another worktree (cd - goes back)'],
+          ['pwd', 'which worktree folder the prompt is in'],
+          ['undo', 'revert the last state-changing command'],
+          ['clear', 'clear this console  (page refresh resets everything)'],
+        ]),
   ];
   const lines = [];
   for (const [a, b] of rows) {
@@ -91,12 +102,8 @@ export function run(w, input) {
   const [cmd, ...rest] = tokens;
 
   if (cmd === 'clear') return { lines: [], ok: true, clear: true };
-  if (cmd === 'help' || cmd === '?') return { lines: helpLines(), ok: true };
-  if (cmd === 'undo') {
-    if (!w.history.length) return { lines: [{ kind: 'note', text: 'Nothing to undo.' }], ok: true };
-    w.state = w.history.pop();
-    return { lines: [{ kind: 'note', text: 'Undid the last command.' }], ok: true };
-  }
+  if (cmd === 'help' || cmd === '?') return { lines: helpLines(w.shared), ok: true };
+  if (cmd === 'undo') return { lines: w.undo(), ok: true };
 
   let handler;
   let args;
@@ -108,8 +115,9 @@ export function run(w, input) {
     args = rest;
   } else if (cmd === 'git') {
     const sub = rest[0];
-    if (!sub) return { lines: helpLines(), ok: true };
-    handler = GIT[sub];
+    if (!sub) return { lines: helpLines(w.shared), ok: true };
+    // hasOwn: typed text must never reach inherited keys like "constructor" or "__proto__".
+    handler = Object.hasOwn(GIT, sub) ? GIT[sub] : undefined;
     args = rest.slice(1);
     if (!handler) {
       return {
@@ -120,7 +128,7 @@ export function run(w, input) {
       };
     }
   } else {
-    const suggestion = GIT[cmd] ? ` Did you mean "git ${text}"?` : ' Type "help" to see what you can do.';
+    const suggestion = Object.hasOwn(GIT, cmd) ? ` Did you mean "git ${text}"?` : ' Type "help" to see what you can do.';
     return { lines: [{ kind: 'err', text: `${cmd}: command not found.${suggestion}` }], ok: false };
   }
 
@@ -135,9 +143,6 @@ export function run(w, input) {
     lines = e.lines.map(toLine);
     ok = false;
   }
-  if (w.signature() !== before) {
-    w.history.push(snap);
-    if (w.history.length > 200) w.history.shift();
-  }
+  if (w.signature() !== before) w.remember(snap);
   return { lines: lines.map(toLine), ok };
 }

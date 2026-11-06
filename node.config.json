@@ -5,7 +5,7 @@
     "disable-sigusr1": true
   },
   "permission": {
-    "allow-fs-read": ["./public"],
+    "allow-fs-read": ["./public", "./server"],
     "allow-net": true
   }
 }

@@ -1,7 +1,7 @@
 // Commands that talk to the simulated "origin" remote, plus teammate simulation.
 
 import { GitError, parseOpts } from './parse.js';
-import { REMOTE, REMOTE_URL, isValidBranchName } from './world.js';
+import { DEFAULT_BRANCH, REMOTE, REMOTE_URL, isValidBranchName } from './world.js';
 import { doMerge, doRebase, note, out } from './local.js';
 
 const hintErr = (text) => ({ kind: 'hint', text: `hint: ${text}` });
@@ -142,6 +142,15 @@ export function push(w, args) {
     if (!r.branches.has(name)) {
       throw new GitError([`error: unable to delete '${name}': remote ref does not exist`, `error: failed to push some refs to '${REMOTE_URL}'`]);
     }
+    if (name === DEFAULT_BRANCH) {
+      // Servers refuse to delete the branch their HEAD points at (what a clone checks out).
+      throw new GitError([
+        `remote: error: refusing to delete the current branch: refs/heads/${name}`,
+        `To ${REMOTE_URL}`,
+        ` ! [remote rejected] ${name} (deletion of the current branch prohibited)`,
+        `error: failed to push some refs to '${REMOTE_URL}'`,
+      ]);
+    }
     r.branches.delete(name);
     l.remoteRefs.delete(`${REMOTE}/${name}`);
     return [out(`To ${REMOTE_URL}`), out(` - [deleted]         ${name}`)];
@@ -254,6 +263,12 @@ export function remoteCmd(w, args) {
 // ---- teammate simulation (not a git command) ---------------------------------
 
 export function teammate(w, args) {
+  if (w.shared) {
+    throw new GitError([
+      'remote: in a shared session your teammates are real people, so there is no simulated teammate.',
+      note('Ask someone in the session to push, or open the invite link in another browser tab and push as a second person.'),
+    ]);
+  }
   const [sub, ...rest] = args;
   const r = w.remote;
   if (sub === 'commit') {

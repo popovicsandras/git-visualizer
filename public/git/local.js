@@ -90,7 +90,7 @@ export function commit(w, args) {
   let c;
   if (opts.amend) {
     const old = w.commit(head);
-    c = w.createCommit(old.parents, msg ?? old.message, 'you');
+    c = w.createCommit(old.parents, msg ?? old.message);
   } else {
     c = w.createCommit([head], msg ?? w.nextMessage());
   }

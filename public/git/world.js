@@ -36,7 +36,8 @@ export function relativePath(path, from = MAIN_WORKTREE) {
   return [...Array(b.length - k).fill('..'), ...a.slice(k)].join('/');
 }
 
-function mulberry32(seed) {
+/** Small seeded PRNG (commit ids). Not for anything secret. */
+export function mulberry32(seed = Math.floor(Math.random() * 2 ** 32)) {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) | 0;
@@ -60,58 +61,155 @@ export function isValidBranchName(name) {
   );
 }
 
+const note = (text) => ({ kind: 'note', text });
+
 export class World {
-  constructor({ seed } = {}) {
-    this.rand = mulberry32(seed ?? Math.floor(Math.random() * 2 ** 32));
-    this.history = [];
+  /**
+   * new World({ seed })   a standalone repo: a fresh clone of its own private origin.
+   * new World({ state })  a view over existing state, e.g. one person's repo in a shared
+   *                       session (state.local is theirs, everything else is shared).
+   *
+   * `author` is written on new commits. `shared` marks a session with real teammates,
+   * where the teammate simulation is switched off.
+   */
+  constructor({ seed, state, rand, author = 'you', shared = false, history = [] } = {}) {
+    this.rand = rand ?? mulberry32(seed);
+    this.author = author;
+    this.shared = shared;
+    this.history = history;
+    if (state) {
+      this.state = state;
+      return;
+    }
     this.state = {
       seq: 0,
       counter: 0,
       objects: new Map(), // id -> { id, parents, message, author, seq, copiedFrom? }
-      local: {
-        has: new Set(), // commit ids present in the local object store
-        branches: new Map(), // name -> id
-        remoteRefs: new Map(), // 'origin/name' -> id  (remote-tracking branches)
-        upstream: new Map(), // local branch name -> 'origin/name'
-        // HEAD of the worktree the prompt is in (cwd).
-        head: { type: 'branch', name: DEFAULT_BRANCH }, // or { type: 'detached', id }
-        // Every worktree, main first. The current one's HEAD lives in `head` above (its own is null);
-        // switching folders swaps them.
-        worktrees: new Map([[MAIN_WORKTREE, { path: MAIN_WORKTREE, head: null }]]),
-        cwd: MAIN_WORKTREE,
-        oldpwd: null, // for `cd -`
-      },
+      local: null,
       remote: {
         has: new Set(),
         branches: new Map(),
       },
     };
-    // Start as if the repo was just cloned: three commits in a row on main, present on both sides.
-    let tip = null;
-    for (let i = 0; i < 3; i++) {
-      const c = this.createCommit(tip ? [tip] : [], tip ? this.nextMessage() : 'Initial commit', 'you');
-      this.local.has.add(c.id);
-      this.remote.has.add(c.id);
-      tip = c.id;
-    }
-    this.local.branches.set(DEFAULT_BRANCH, tip);
-    this.remote.branches.set(DEFAULT_BRANCH, tip);
-    this.local.remoteRefs.set(`${REMOTE}/${DEFAULT_BRANCH}`, tip);
-    this.local.upstream.set(DEFAULT_BRANCH, `${REMOTE}/${DEFAULT_BRANCH}`);
+    this.seedOrigin();
+    this.state.local = this.cloneLocal();
   }
 
   get local() { return this.state.local; }
   get remote() { return this.state.remote; }
   get objects() { return this.state.objects; }
 
+  /** Give an empty origin three commits in a row on main. */
+  seedOrigin() {
+    let tip = null;
+    for (let i = 0; i < 3; i++) {
+      const c = this.createCommit(tip ? [tip] : [], tip ? this.nextMessage() : 'Initial commit');
+      this.remote.has.add(c.id);
+      tip = c.id;
+    }
+    this.remote.branches.set(DEFAULT_BRANCH, tip);
+  }
+
+  /** A local repository freshly cloned from origin, as `git clone` would leave it. */
+  cloneLocal() {
+    const r = this.remote;
+    const local = {
+      has: new Set(), // commit ids present in the local object store
+      branches: new Map(), // name -> id
+      remoteRefs: new Map(), // 'origin/name' -> id  (remote-tracking branches)
+      upstream: new Map(), // local branch name -> 'origin/name'
+      // HEAD of the worktree the prompt is in (cwd).
+      head: null, // { type: 'branch', name } or { type: 'detached', id }
+      // Every worktree, main first. The current one's HEAD lives in `head` above (its own is null);
+      // switching folders swaps them.
+      worktrees: new Map([[MAIN_WORKTREE, { path: MAIN_WORKTREE, head: null }]]),
+      cwd: MAIN_WORKTREE,
+      oldpwd: null, // for `cd -`
+    };
+    for (const [name, id] of [...r.branches].sort()) {
+      for (const a of this.ancestors(id)) local.has.add(a);
+      local.remoteRefs.set(`${REMOTE}/${name}`, id);
+    }
+    const def = r.branches.has(DEFAULT_BRANCH) ? DEFAULT_BRANCH : [...r.branches.keys()].sort()[0];
+    local.branches.set(def, r.branches.get(def));
+    local.upstream.set(def, `${REMOTE}/${def}`);
+    local.head = { type: 'branch', name: def };
+    return local;
+  }
+
   // ---- undo support -------------------------------------------------------
+  // run() takes a snapshot before each command and calls remember() if the command
+  // changed anything. A shared session overrides these so undo only rewinds your
+  // own repository and never origin, which other people use too.
   snapshot() { return structuredClone(this.state); }
+  remember(snap) {
+    this.history.push(snap);
+    if (this.history.length > 200) this.history.shift();
+  }
+  /** Returns the lines to print. */
+  undo() {
+    const snap = this.history.pop();
+    if (!snap) return [note('Nothing to undo.')];
+    this.state = snap;
+    return [note('Undid the last command.')];
+  }
+  remoteSignature() {
+    const r = this.state.remote;
+    return JSON.stringify([[...r.branches], r.has.size]);
+  }
   signature() {
-    const { local: l, remote: r } = this.state;
+    const l = this.state.local;
     return JSON.stringify([
       this.state.seq, l.head, [...l.branches], [...l.remoteRefs], [...l.upstream],
-      [...l.worktrees], l.cwd, l.has.size, [...r.branches], r.has.size,
+      [...l.worktrees], l.cwd, l.has.size, this.remoteSignature(),
     ]);
+  }
+
+  // ---- sending over the wire -----------------------------------------------
+  /** Plain JSON for what this repo's owner can see: their local repo, plus origin. */
+  toView() {
+    const { local: l, remote: r } = this.state;
+    const ids = new Set([...l.has, ...r.has]);
+    return {
+      seq: this.state.seq,
+      counter: this.state.counter,
+      objects: [...ids].map((id) => this.objects.get(id)),
+      local: {
+        has: [...l.has],
+        branches: [...l.branches],
+        remoteRefs: [...l.remoteRefs],
+        upstream: [...l.upstream],
+        head: l.head,
+        worktrees: [...l.worktrees.values()],
+        cwd: l.cwd,
+        oldpwd: l.oldpwd,
+      },
+      remote: { has: [...r.has], branches: [...r.branches] },
+    };
+  }
+
+  /** Rebuild a World from toView() output (read-only use: drawing, completion). */
+  static fromView(v, opts = {}) {
+    const l = v.local;
+    return new World({
+      ...opts,
+      state: {
+        seq: v.seq,
+        counter: v.counter,
+        objects: new Map(v.objects.map((c) => [c.id, c])),
+        local: {
+          has: new Set(l.has),
+          branches: new Map(l.branches),
+          remoteRefs: new Map(l.remoteRefs),
+          upstream: new Map(l.upstream),
+          head: l.head,
+          worktrees: new Map(l.worktrees.map((t) => [t.path, t])),
+          cwd: l.cwd,
+          oldpwd: l.oldpwd,
+        },
+        remote: { has: new Set(v.remote.has), branches: new Map(v.remote.branches) },
+      },
+    });
   }
 
   // ---- commits -------------------------------------------------------------
@@ -123,7 +221,7 @@ export class World {
     return id;
   }
 
-  createCommit(parents, message, author = 'you', extra = {}) {
+  createCommit(parents, message, author = this.author, extra = {}) {
     const c = { id: this.newId(), parents: [...parents], message, author, seq: ++this.state.seq, ...extra };
     this.objects.set(c.id, c);
     return c;

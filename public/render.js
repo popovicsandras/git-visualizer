@@ -1,6 +1,8 @@
 // Draws one panel's layout into an <svg>. Uses DOM APIs only (no innerHTML),
 // so commit messages typed by users are always treated as text.
 
+import { initials } from './people.js';
+
 const NS = 'http://www.w3.org/2000/svg';
 const R = 11; // node radius
 const PAD_X = 48;
@@ -42,7 +44,7 @@ function truncate(str, width) {
  * so new commits and moved labels can be animated. Returns the new `prev` plus
  * the root group and the content size, for the pan/zoom controller.
  */
-export function renderPanel(svg, lay, { columns, colW, prev, onNodeClick }) {
+export function renderPanel(svg, lay, { columns, colW, prev, onNodeClick, me = 'you' }) {
   svg.replaceChildren();
 
   // Lane geometry: each lane gets enough headroom for its tallest label stack.
@@ -108,7 +110,7 @@ export function renderPanel(svg, lay, { columns, colW, prev, onNodeClick }) {
       `lane-${n.lane % LANE_COLORS}`,
       n.faded && 'faded',
       n.isHead && 'head',
-      n.author === 'teammate' && 'teammate',
+      n.author !== me && 'teammate',
       prev && !prev.nodes.has(n.id) && 'enter',
     ].filter(Boolean).join(' ');
     const g = el('g', { class: cls, transform: `translate(${x},${y})`, 'data-id': n.id }, nodesG);
@@ -121,8 +123,11 @@ export function renderPanel(svg, lay, { columns, colW, prev, onNodeClick }) {
     ].filter(Boolean).join('\n');
     el('title', {}, g).textContent = tip;
     if (n.isHead) el('circle', { r: R + 5, class: 'head-ring' }, g);
-    if (n.author === 'teammate') el('rect', { x: -R, y: -R, width: R * 2, height: R * 2, rx: 4, class: 'dot' }, g);
+    // Your commits are round; everyone else's are square. Both carry the author's initials.
+    if (n.author !== me) el('rect', { x: -R, y: -R, width: R * 2, height: R * 2, rx: 4, class: 'dot' }, g);
     else el('circle', { r: R, class: 'dot' }, g);
+    const ini = initials(n.author);
+    text(g, ini, { y: 3.5, class: `initial${[...ini].length > 1 ? ' two' : ''}` });
     text(g, n.id.slice(0, 7), { y: R + 15, class: 'hash' });
     text(g, truncate(n.message, colW - 8), { y: R + 29, class: 'msg' });
     if (onNodeClick) g.addEventListener('click', () => onNodeClick(n));

@@ -8,24 +8,84 @@
     <link rel="stylesheet" href="style.css" />
     <script type="module" src="app.js"></script>
   </head>
-  <body>
+  <body class="in-lobby">
+    <main class="lobby" id="lobby" aria-labelledby="lobby-title">
+      <div class="lobby-inner">
+        <div class="lobby-brand">
+          <span class="logo" aria-hidden="true"></span>
+          <h1 id="lobby-title">Git Visualizer</h1>
+        </div>
+        <p class="tagline">
+          A shared git playground. Everyone in a session gets their own clone of one <code>origin</code>:
+          branch, commit, push and pull together, and watch every graph change live.
+        </p>
+
+        <form class="lobby-form" id="lobby-form" novalidate>
+          <div class="field name-field">
+            <label for="lobby-name">Your name</label>
+            <input id="lobby-name" name="name" type="text" maxlength="24" required autocomplete="nickname"
+              spellcheck="false" placeholder="e.g. Alex" aria-describedby="lobby-name-help" />
+            <small id="lobby-name-help">Teammates see it on your commits and pushes.</small>
+          </div>
+
+          <div class="choices">
+            <section class="choice" id="choice-create" aria-labelledby="create-title">
+              <div class="choice-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </div>
+              <h2 id="create-title">Start a new session</h2>
+              <p>You get a fresh repository with its own <code>main</code>. Then share the link so others can join.</p>
+              <button type="button" class="primary" id="btn-create">Create session</button>
+            </section>
+
+            <div class="or" aria-hidden="true"><span>or</span></div>
+
+            <section class="choice" id="choice-join" aria-labelledby="join-title">
+              <div class="choice-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="20" height="20"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <h2 id="join-title">Join a session</h2>
+              <div class="field">
+                <label for="lobby-link">Session link or code</label>
+                <input id="lobby-link" name="link" type="text" spellcheck="false" autocapitalize="off" autocomplete="off"
+                  placeholder="paste the link you were sent" />
+              </div>
+              <button type="button" id="btn-join">Join session</button>
+            </section>
+          </div>
+          <p class="form-error" id="lobby-error" role="alert"></p>
+        </form>
+        <p class="lobby-foot">Sessions live in the server's memory until it stops. No files, no real git.</p>
+      </div>
+    </main>
+
     <header class="topbar">
       <div class="brand">
         <span class="logo" aria-hidden="true"></span>
         <h1>Git Visualizer</h1>
       </div>
+      <div class="session-bar">
+        <button type="button" id="btn-invite" class="session-chip" title="Invite people: show and copy this session's link">
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M6.5 9.5a2.8 2.8 0 0 0 4 0l2-2a2.8 2.8 0 0 0-4-4l-.7.7M9.5 6.5a2.8 2.8 0 0 0-4 0l-2 2a2.8 2.8 0 0 0 4 4l.7-.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span class="code" id="session-code"></span>
+          <span class="invite">Invite</span>
+        </button>
+        <ul class="people" id="people" aria-label="People in this session"></ul>
+      </div>
       <ul class="legend" aria-label="Legend">
         <li><span class="sw pill current">HEAD → main</span>checked out</li>
-        <li><span class="sw pill tracking">origin/main</span>last known remote position</li>
+        <li><span class="sw pill tracking">origin/main</span>last fetched position</li>
         <li><span class="sw pill worktree">feature</span>in another worktree</li>
+        <li><span class="sw dot"></span>yours <span class="sw square"></span>a teammate's</li>
         <li><span class="sw ghost"></span>unreachable</li>
       </ul>
       <div class="actions">
-        <button type="button" id="btn-teammate" title="Simulate a teammate pushing a commit to origin/main">Teammate pushes to main</button>
-        <button type="button" id="btn-undo" title="Undo the last state-changing command">Undo</button>
-        <button type="button" id="btn-reset" class="danger" title="Start over from a fresh clone">Reset</button>
+        <button type="button" id="btn-undo" title="Undo your last state-changing command (origin is shared and stays)">Undo</button>
+        <button type="button" id="btn-reset" class="danger" title="Throw away your repository and clone origin again">Re-clone</button>
+        <button type="button" id="btn-leave" title="Back to the start page. You can rejoin with the same name.">Leave</button>
       </div>
     </header>
+    <div class="conn-banner" id="conn-banner" role="status" hidden>Connection lost. Reconnecting…</div>
 
     <div class="workspace">
     <aside class="sidebar" id="sidebar" aria-labelledby="wt-title">
@@ -74,7 +134,7 @@
       <div class="output" id="output" role="log" aria-live="polite"></div>
       <form class="prompt" id="prompt" autocomplete="off">
         <label for="cmd" class="ps1" id="ps1"></label>
-        <input id="cmd" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder='try: git checkout -b feature' autofocus />
+        <input id="cmd" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder='try: git checkout -b feature' />
       </form>
     </section>
 
@@ -126,6 +186,27 @@
         <footer class="modal-actions">
           <button type="button" data-close autofocus>Cancel</button>
           <button type="submit" value="delete" class="danger solid">Delete worktree</button>
+        </footer>
+      </form>
+    </dialog>
+    <dialog class="modal" id="invite-dialog" aria-labelledby="invite-title">
+      <form method="dialog">
+        <header class="modal-head">
+          <h3 id="invite-title">Invite people</h3>
+          <p id="invite-text">Send this link to your teammates. They open it, enter their name, and get their own clone of this session's <code>origin</code>.</p>
+        </header>
+        <div class="share-row">
+          <input id="invite-link" type="text" readonly aria-label="Session link" />
+          <button type="button" id="invite-copy" class="primary">Copy link</button>
+        </div>
+        <p class="share-code">Or have them paste the code <b id="invite-code"></b> into the start page.</p>
+        <p class="callout" id="invite-local" hidden>
+          This link points at <b id="invite-host"></b>, which only works on this computer: you can open it in another
+          browser tab to play a second person. To invite people on your network, start the server with
+          <code>HOST=0.0.0.0 npm start</code> and open the app at this machine's network address.
+        </p>
+        <footer class="modal-actions">
+          <button type="submit" class="primary" id="invite-done">Done</button>
         </footer>
       </form>
     </dialog>
