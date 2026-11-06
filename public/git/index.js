@@ -7,6 +7,7 @@ import * as remote from './remote.js';
 import { cd, pwd, worktree } from './worktree.js';
 
 export { World };
+export { QUICK_ACTIONS, quickAction } from './actions.js';
 export { DEFAULT_BRANCH, MAIN_WORKTREE, REMOTE, isValidBranchName, mulberry32, relativePath, resolvePath } from './world.js';
 
 const GIT = {

@@ -217,7 +217,7 @@ button.danger:hover { border-color: var(--err); color: var(--err); }
 /* ---- worktree sidebar ------------------------------------------------------ */
 .workspace {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   min-height: 0;
 }
 .sidebar {
@@ -500,6 +500,70 @@ button.danger.solid:hover { background: #e5534b; border-color: #ff7b72; color: #
 .zoom button { padding: 2px 8px; font: 12px var(--mono); min-width: 26px; }
 .zoom .level { min-width: 52px; }
 
+/* ---- quick actions (right rail) --------------------------------------------- */
+.quick-actions {
+  width: 44px;
+  min-height: 0;
+  background: var(--bg-elev);
+  border-left: 1px solid var(--border);
+}
+.qa-list {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 8px 0;
+}
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+.qa-sep { width: 20px; height: 1px; margin: 3px 0; background: var(--border); flex: none; }
+.qa-btn {
+  display: grid; place-items: center;
+  width: 32px; height: 32px; padding: 0; flex: none;
+  color: var(--text-dim);
+  background: transparent; border-color: transparent;
+  border-radius: 8px;
+}
+.qa-btn:hover { color: var(--text); background: #283140; border-color: #3a4452; }
+.qa-btn:active:not([aria-disabled='true']) { background: #2f3a4a; }
+.qa-btn.danger:hover:not([aria-disabled='true']) { color: var(--err); background: #ff7b7214; border-color: #ff7b7255; }
+.qa-btn[aria-disabled='true'] { opacity: 0.35; cursor: not-allowed; }
+.qa-btn[aria-disabled='true']:hover { background: transparent; border-color: transparent; color: var(--text-dim); }
+body.busy .qa-btn:not([aria-disabled='true']) { cursor: progress; }
+
+/* One floating tooltip, placed to the left of the hovered button by app.js. */
+.qa-tip {
+  position: fixed; top: 0; left: 0; z-index: 30;
+  width: max-content; max-width: 260px;
+  padding: 8px 11px 9px;
+  background: #1c2129;
+  border: 1px solid #343c48;
+  border-radius: 8px;
+  box-shadow: 0 10px 28px #000b;
+  pointer-events: none;
+  visibility: hidden; opacity: 0;
+  transform: translateX(4px);
+  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0s linear 0.12s;
+}
+.qa-tip.show { visibility: visible; opacity: 1; transform: none; transition-delay: 0s; }
+.qa-tip::after {
+  content: '';
+  position: absolute; right: -5px; top: var(--arrow-y, 50%);
+  width: 8px; height: 8px; margin-top: -4px;
+  background: inherit;
+  border: solid #343c48; border-width: 1px 1px 0 0;
+  transform: rotate(45deg);
+}
+.qa-tip-title { display: block; font: 600 12.5px var(--sans); color: var(--text); }
+.qa-tip-text { margin: 3px 0 0; font-size: 12px; line-height: 1.45; color: var(--text-dim); }
+.qa-tip-cmd {
+  display: block; margin-top: 7px; padding: 4px 7px;
+  font: 11.5px var(--mono); color: var(--ok);
+  background: var(--bg-term); border-radius: 4px;
+}
+.qa-tip-cmd:empty { display: none; }
+.qa-tip.danger .qa-tip-title { color: var(--err); }
+.qa-tip.unavailable .qa-tip-text { color: var(--warn); }
+
 /* ---- graph ----------------------------------------------------------------- */
 .lane-0 { --c: var(--lane-0); }
 .lane-1 { --c: var(--lane-1); }
@@ -558,7 +622,7 @@ button.danger.solid:hover { background: #e5534b; border-color: #ff7b72; color: #
 @media (prefers-reduced-motion: reduce) {
   .head-ring, .node.enter .dot, .label.flash, .wt-item.enter, .wt-item.arrive,
   .modal[open], .modal[open]::backdrop { animation: none; }
-  .sidebar, #sidebar-toggle svg { transition: none; }
+  .sidebar, #sidebar-toggle svg, .qa-tip { transition: none; }
 }
 
 /* ---- terminal -------------------------------------------------------------- */

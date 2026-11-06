@@ -1,4 +1,4 @@
-import { World, GIT_COMMANDS, MAIN_WORKTREE, isValidBranchName, relativePath } from './git/index.js';
+import { World, GIT_COMMANDS, MAIN_WORKTREE, QUICK_ACTIONS, isValidBranchName, quickAction, relativePath } from './git/index.js';
 import { layout } from './layout.js';
 import { renderPanel, columnWidth } from './render.js';
 import { LinkedPanZoom } from './pan-zoom.js';
@@ -75,6 +75,7 @@ function draw({ follow = true } = {}) {
   prev.remote = renderPanel(svgRemote, lay.remote, { ...opts, prev: prev.remote });
   updateMeta();
   renderWorktrees();
+  renderQuickActions();
   // Give each panel vertical space in proportion to how tall its graph is.
   const head = document.querySelector('.panel-head').offsetHeight + 2;
   const hl = prev.local.height + head;
@@ -210,12 +211,12 @@ resizer.addEventListener('keydown', (e) => {
   setSidebarWidth(next);
 });
 
-function svgIcon(d) {
+function svgIcon(d, size = 14) {
   const NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('viewBox', '0 0 16 16');
-  svg.setAttribute('width', '14');
-  svg.setAttribute('height', '14');
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
   svg.setAttribute('aria-hidden', 'true');
   const path = document.createElementNS(NS, 'path');
   path.setAttribute('d', d);
@@ -592,6 +593,113 @@ $('btn-leave').addEventListener('click', () => {
   showLobby({ code });
 });
 
+// ---- quick actions (right rail) ------------------------------------------------
+// One click runs the default git command for the current branch, echoed in the terminal
+// like a typed one. quickAction() decides the exact command from the current state.
+
+const QUICK = {
+  commit: { label: 'Commit', group: 'local', icon: 'M1.5 8H5M11 8h3.5M5 8a3 3 0 1 0 6 0a3 3 0 1 0-6 0' },
+  rebase: { label: 'Rebase', group: 'local', icon: 'M4 2v12M4 12c4 0 8-1.5 8-6V3M10 5l2-2 2 2' },
+  fetch: {
+    label: 'Fetch',
+    group: 'remote',
+    icon: 'M14 8a6 6 0 1 1-6-6c1.68 0 3.29.67 4.49 1.83L14 5.33M14 2v3.33h-3.33',
+  },
+  pull: { label: 'Pull', group: 'remote', icon: 'M8 11.3V2M4 7.3l4 4 4-4M12.7 14H3.3' },
+  push: { label: 'Push', group: 'remote', icon: 'M12 6 8 2 4 6M8 2v9.3M3.3 14h9.4' },
+  'force-push': {
+    label: 'Force push',
+    group: 'remote',
+    danger: true,
+    icon: 'M12 6.5 8 2.5 4 6.5M12 10.5 8 6.5 4 10.5M3.3 14h9.4',
+  },
+};
+const qaList = $('qa-list');
+const qaTip = $('qa-tip');
+const qaButtons = new Map(); // kind -> { btn, desc }
+let tipFor = null; // the button whose tooltip is showing
+
+function runQuickAction(kind) {
+  const job = queue.then(() => {
+    // Decide when it runs, not on click: a queued command (a cd, another click) may move HEAD first.
+    const a = world && quickAction(world, kind);
+    if (!a) return false;
+    if (!a.cmd) {
+      print([{ kind: 'err', text: a.reason }]);
+      return false;
+    }
+    return runCommand(a.cmd, true);
+  });
+  queue = job.catch(() => {});
+}
+
+function fillTip(btn) {
+  const kind = btn.dataset.kind;
+  const a = world ? quickAction(world, kind) : { cmd: null, reason: '' };
+  qaTip.querySelector('.qa-tip-title').textContent = QUICK[kind].label;
+  qaTip.querySelector('.qa-tip-text').textContent = a.cmd ? a.detail : a.reason;
+  qaTip.querySelector('.qa-tip-cmd').textContent = a.cmd ?? '';
+  qaTip.classList.toggle('danger', Boolean(QUICK[kind].danger && a.cmd));
+  qaTip.classList.toggle('unavailable', !a.cmd);
+  // To the left of the button, kept on screen; the arrow keeps pointing at the button.
+  const r = btn.getBoundingClientRect();
+  const { width, height } = qaTip.getBoundingClientRect();
+  const y = Math.max(8, Math.min(window.innerHeight - height - 8, r.top + r.height / 2 - height / 2));
+  qaTip.style.left = `${Math.max(8, r.left - 10 - width)}px`;
+  qaTip.style.top = `${y}px`;
+  qaTip.style.setProperty('--arrow-y', `${r.top + r.height / 2 - y}px`);
+}
+function showTip(btn) {
+  tipFor = btn;
+  fillTip(btn);
+  qaTip.classList.add('show');
+}
+function hideTip() {
+  tipFor = null;
+  qaTip.classList.remove('show');
+}
+
+let lastGroup = null;
+for (const kind of QUICK_ACTIONS) {
+  const { label, group, icon, danger } = QUICK[kind];
+  if (lastGroup && group !== lastGroup) {
+    qaList.append(Object.assign(document.createElement('div'), { className: 'qa-sep', role: 'separator' }));
+  }
+  lastGroup = group;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = `qa-btn${danger ? ' danger' : ''}`;
+  btn.dataset.kind = kind;
+  btn.setAttribute('aria-label', label);
+  const desc = span('', 'sr-only');
+  desc.id = `qa-desc-${kind}`;
+  btn.setAttribute('aria-describedby', desc.id);
+  btn.append(svgIcon(icon, 16), desc);
+  btn.addEventListener('click', (e) => {
+    if (btn.getAttribute('aria-disabled') === 'true') return;
+    runQuickAction(kind);
+    if (e.detail !== 0) input.focus(); // a mouse click; keyboard users stay on the button
+  });
+  btn.addEventListener('pointerenter', (e) => e.pointerType !== 'touch' && showTip(btn));
+  btn.addEventListener('pointerleave', () => tipFor === btn && !btn.matches(':focus-visible') && hideTip());
+  btn.addEventListener('focus', () => btn.matches(':focus-visible') && showTip(btn));
+  btn.addEventListener('blur', () => tipFor === btn && !btn.matches(':hover') && hideTip());
+  qaList.append(btn);
+  qaButtons.set(kind, { btn, desc });
+}
+document.addEventListener('keydown', (e) => e.key === 'Escape' && hideTip());
+window.addEventListener('resize', hideTip);
+
+/** Enable/disable each button and refresh its description (and the open tooltip) for the current state. */
+function renderQuickActions() {
+  for (const [kind, { btn, desc }] of qaButtons) {
+    const a = quickAction(world, kind);
+    btn.setAttribute('aria-disabled', String(!a.cmd));
+    desc.textContent = a.cmd ? `${a.detail} Runs ${a.cmd}` : a.reason;
+  }
+  if (tipFor) fillTip(tipFor);
+}
+
 // ---- people + invite ---------------------------------------------------------
 
 function renderPeople(list) {
@@ -733,6 +841,7 @@ const btnJoin = $('btn-join');
 
 function showLobby({ code = null, error = '' } = {}) {
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  hideTip();
   document.body.classList.add('in-lobby');
   document.title = 'Git Visualizer';
   world = null;
