@@ -17,6 +17,7 @@
       <ul class="legend" aria-label="Legend">
         <li><span class="sw pill current">HEAD → main</span>checked out</li>
         <li><span class="sw pill tracking">origin/main</span>last known remote position</li>
+        <li><span class="sw pill worktree">feature</span>in another worktree</li>
         <li><span class="sw ghost"></span>unreachable</li>
       </ul>
       <div class="actions">
@@ -25,6 +26,25 @@
         <button type="button" id="btn-reset" class="danger" title="Start over from a fresh clone">Reset</button>
       </div>
     </header>
+
+    <div class="workspace">
+    <aside class="sidebar" id="sidebar" aria-labelledby="wt-title">
+      <div class="sidebar-head">
+        <button type="button" id="sidebar-toggle" class="icon-btn" aria-expanded="true" aria-controls="wt-body" title="Collapse worktrees">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <h2 id="wt-title">Worktrees <span class="count" id="wt-count"></span></h2>
+      </div>
+      <div class="sidebar-body" id="wt-body">
+        <ul class="wt-list" id="wt-list" aria-label="Worktrees"></ul>
+        <button type="button" id="wt-new" class="wt-new">
+          <span aria-hidden="true">+</span> New worktree
+        </button>
+        <p class="wt-hint">Each worktree is a separate folder with its own HEAD, sharing this repo's commits and branches. Click one to <code>cd</code> into it.</p>
+      </div>
+      <div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-controls="sidebar"
+        aria-label="Resize worktrees sidebar" title="Drag to resize · double-click to reset" tabindex="0"></div>
+    </aside>
 
     <main class="panels">
       <section class="panel" aria-labelledby="local-title">
@@ -48,6 +68,7 @@
         <div class="viewport" id="view-remote"><svg id="svg-remote" role="img" aria-label="Remote commit graph"></svg></div>
       </section>
     </main>
+    </div>
 
     <section class="terminal" aria-label="Command line">
       <div class="output" id="output" role="log" aria-live="polite"></div>
@@ -56,5 +77,57 @@
         <input id="cmd" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder='try: git checkout -b feature' autofocus />
       </form>
     </section>
+
+    <dialog class="modal" id="wt-dialog" aria-labelledby="wt-dialog-title">
+      <form method="dialog" id="wt-form" novalidate>
+        <header class="modal-head">
+          <h3 id="wt-dialog-title">New worktree</h3>
+          <p>Check out a new branch in a separate folder, next to <code>~/project</code>.</p>
+        </header>
+        <div class="field">
+          <label for="wt-base">Branch</label>
+          <select id="wt-base" name="base"></select>
+          <small>The new worktree's branch starts from here.</small>
+        </div>
+        <div class="field">
+          <label for="wt-name">Worktree name</label>
+          <input id="wt-name" name="name" type="text" required spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="feature" aria-describedby="wt-name-help" />
+          <small id="wt-name-help">Becomes the new branch's name.</small>
+        </div>
+        <div class="field">
+          <label for="wt-folder">Folder name</label>
+          <div class="path-input">
+            <span aria-hidden="true">~/</span>
+            <input id="wt-folder" name="folder" type="text" required spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="project-feature" />
+          </div>
+        </div>
+        <div class="cmd-preview" aria-live="polite">
+          <span class="label">Runs</span>
+          <code id="wt-preview"></code>
+        </div>
+        <p class="form-error" id="wt-error" role="alert"></p>
+        <footer class="modal-actions">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" value="create" class="primary" id="wt-create">Create worktree</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="modal small" id="wt-confirm" aria-labelledby="wt-confirm-title">
+      <form method="dialog">
+        <header class="modal-head">
+          <h3 id="wt-confirm-title">Delete worktree?</h3>
+          <p id="wt-confirm-text"></p>
+        </header>
+        <div class="cmd-preview">
+          <span class="label">Runs</span>
+          <code id="wt-confirm-cmd"></code>
+        </div>
+        <footer class="modal-actions">
+          <button type="button" data-close autofocus>Cancel</button>
+          <button type="submit" value="delete" class="danger solid">Delete worktree</button>
+        </footer>
+      </form>
+    </dialog>
   </body>
 </html>

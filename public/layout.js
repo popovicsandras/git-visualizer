@@ -62,9 +62,20 @@ function panelLayout(w, which, col) {
   if (which === 'local') {
     const h = repo.head;
     if (h.type === 'detached') add(h.id, { text: 'HEAD', type: 'detached', ref: 'HEAD' });
+    for (const t of w.otherWorktrees()) {
+      if (t.head.type === 'detached') {
+        add(t.head.id, { text: `HEAD (${t.path.slice(t.path.lastIndexOf('/') + 1)})`, type: 'worktree', ref: `wt:${t.path}` });
+      }
+    }
     for (const [name, id] of [...repo.branches].sort()) {
       const current = h.type === 'branch' && h.name === name;
-      add(id, { text: current ? `HEAD → ${name}` : name, type: current ? 'current' : 'branch', ref: name });
+      // Checked out in another worktree: that folder's HEAD → name.
+      const elsewhere = !current && w.worktreeUsing(name);
+      add(id, {
+        text: current ? `HEAD → ${name}` : name,
+        type: current ? 'current' : elsewhere ? 'worktree' : 'branch',
+        ref: name,
+      });
     }
     for (const [name, id] of [...repo.remoteRefs].sort()) add(id, { text: name, type: 'tracking', ref: name });
   } else {

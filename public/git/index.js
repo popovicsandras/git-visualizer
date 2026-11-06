@@ -4,8 +4,10 @@ import { GitError, tokenize } from './parse.js';
 import { World } from './world.js';
 import * as local from './local.js';
 import * as remote from './remote.js';
+import { cd, pwd, worktree } from './worktree.js';
 
 export { World };
+export { MAIN_WORKTREE, isValidBranchName, relativePath, resolvePath } from './world.js';
 
 const GIT = {
   commit: local.commit,
@@ -19,6 +21,7 @@ const GIT = {
   revert: local.revert,
   log: local.log,
   status: local.status,
+  worktree,
   fetch: remote.fetch,
   pull: remote.pull,
   push: remote.push,
@@ -42,6 +45,9 @@ export function helpLines() {
     ['git revert <ref>', 'add a commit that undoes another'],
     ['git log [--oneline] [--all]', 'list commits'],
     ['git status', 'where am I, ahead/behind origin?'],
+    ['git worktree add -b <new> <path> [<base>]', 'check out a new branch in another folder'],
+    ['git worktree list', 'show every worktree and what it has checked out'],
+    ['git worktree remove <path>', 'delete a worktree folder (its branch is kept)'],
     ['Remote', ''],
     ['git fetch [--prune]', 'download origin\'s commits, update origin/* refs'],
     ['git pull [--rebase]', 'fetch + merge (or rebase) the upstream branch'],
@@ -49,13 +55,15 @@ export function helpLines() {
     ['Simulation (not git)', ''],
     ['remote commit [<branch>] [-m msg]', 'a teammate pushes a commit to origin'],
     ['remote branch <name> [<from>]', 'a teammate pushes a new branch'],
+    ['cd <worktree folder>', 'move the prompt into another worktree (cd - goes back)'],
+    ['pwd', 'which worktree folder the prompt is in'],
     ['undo', 'revert the last state-changing command'],
     ['clear', 'clear this console  (page refresh resets everything)'],
   ];
   const lines = [];
   for (const [a, b] of rows) {
     if (!b) lines.push({ kind: 'heading', text: a });
-    else lines.push({ kind: 'out', text: `  ${a.padEnd(36)} ${b}` });
+    else lines.push({ kind: 'out', text: `  ${a.padEnd(42)} ${b}` });
   }
   lines.push({ kind: 'note', text: 'Revisions: branch names, origin/main, HEAD, HEAD~2, main^, or a hash prefix.' });
   lines.push({
@@ -92,7 +100,10 @@ export function run(w, input) {
 
   let handler;
   let args;
-  if (cmd === 'remote' || cmd === 'teammate') {
+  if (cmd === 'cd' || cmd === 'pwd') {
+    handler = cmd === 'cd' ? cd : pwd;
+    args = rest;
+  } else if (cmd === 'remote' || cmd === 'teammate') {
     handler = remote.teammate;
     args = rest;
   } else if (cmd === 'git') {

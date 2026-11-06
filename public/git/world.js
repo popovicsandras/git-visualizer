@@ -6,6 +6,35 @@ import { GitError } from './parse.js';
 export const REMOTE = 'origin';
 export const DEFAULT_BRANCH = 'main';
 export const REMOTE_URL = 'https://git.example.com/team/project.git';
+/** Where the primary (main) worktree lives; the prompt starts here. */
+export const MAIN_WORKTREE = '~/project';
+
+/** Resolve a path typed at the prompt (relative to the folder `from`) to a normalised '~/…' path. */
+export function resolvePath(input, from = MAIN_WORKTREE) {
+  const raw = input.replace(/\/+$/, '');
+  let parts;
+  if (raw === '~' || raw.startsWith('~/')) parts = raw.split('/').slice(1);
+  else if (raw.startsWith('/')) return raw.replace(/\/+/g, '/') || '/';
+  else parts = [...from.split('/').slice(1), ...raw.split('/')];
+  const out = [];
+  for (const seg of parts) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') out.pop();
+    else out.push(seg);
+  }
+  return ['~', ...out].join('/');
+}
+
+/** How to type `path` relative to the folder `from` (e.g. '../project-feature'). */
+export function relativePath(path, from = MAIN_WORKTREE) {
+  if (path === from) return '.';
+  if (!path.startsWith('~') || !from.startsWith('~')) return path;
+  const a = path.split('/');
+  const b = from.split('/');
+  let k = 0;
+  while (k < a.length && k < b.length && a[k] === b[k]) k++;
+  return [...Array(b.length - k).fill('..'), ...a.slice(k)].join('/');
+}
 
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -44,7 +73,13 @@ export class World {
         branches: new Map(), // name -> id
         remoteRefs: new Map(), // 'origin/name' -> id  (remote-tracking branches)
         upstream: new Map(), // local branch name -> 'origin/name'
+        // HEAD of the worktree the prompt is in (cwd).
         head: { type: 'branch', name: DEFAULT_BRANCH }, // or { type: 'detached', id }
+        // Every worktree, main first. The current one's HEAD lives in `head` above (its own is null);
+        // switching folders swaps them.
+        worktrees: new Map([[MAIN_WORKTREE, { path: MAIN_WORKTREE, head: null }]]),
+        cwd: MAIN_WORKTREE,
+        oldpwd: null, // for `cd -`
       },
       remote: {
         has: new Set(),
@@ -75,7 +110,7 @@ export class World {
     const { local: l, remote: r } = this.state;
     return JSON.stringify([
       this.state.seq, l.head, [...l.branches], [...l.remoteRefs], [...l.upstream],
-      l.has.size, [...r.branches], r.has.size,
+      [...l.worktrees], l.cwd, l.has.size, [...r.branches], r.has.size,
     ]);
   }
 
@@ -112,6 +147,43 @@ export class World {
     else h.id = id;
   }
 
+  // ---- worktrees -----------------------------------------------------------
+  /** The folder the prompt is in. */
+  get cwd() { return this.local.cwd; }
+  /** Every worktree, main first: [{ path, head, main, current }]. */
+  worktreeList() {
+    return [...this.local.worktrees.values()].map((t) => {
+      const current = t.path === this.local.cwd;
+      return { path: t.path, head: current ? this.local.head : t.head, main: t.path === MAIN_WORKTREE, current };
+    });
+  }
+  /** The worktrees other than the one the prompt is in. */
+  otherWorktrees() {
+    return [...this.local.worktrees.values()].filter((t) => t.path !== this.local.cwd);
+  }
+  /** Move the prompt into another worktree: its HEAD becomes the active one. */
+  switchWorktree(path) {
+    const l = this.local;
+    if (path === l.cwd) return;
+    const to = l.worktrees.get(path);
+    if (!to) throw new Error(`no worktree at ${path}`);
+    l.worktrees.get(l.cwd).head = l.head;
+    l.head = to.head;
+    to.head = null;
+    l.oldpwd = l.cwd;
+    l.cwd = path;
+  }
+  /** Path of another worktree (not the current one) that has `branch` checked out, or null. */
+  worktreeUsing(branch) {
+    for (const t of this.otherWorktrees()) {
+      if (t.head.type === 'branch' && t.head.name === branch) return t.path;
+    }
+    return null;
+  }
+  worktreeHeadId(t) {
+    return t.head.type === 'branch' ? this.local.branches.get(t.head.name) : t.head.id;
+  }
+
   // ---- graph queries -------------------------------------------------------
   ancestors(id) {
     const seen = new Set();
@@ -141,6 +213,7 @@ export class World {
     if (which === 'local') {
       tips.push(...repo.remoteRefs.values());
       tips.push(this.headId());
+      for (const t of this.otherWorktrees()) tips.push(this.worktreeHeadId(t));
     }
     const all = new Set();
     for (const t of tips) for (const id of this.ancestors(t)) all.add(id);

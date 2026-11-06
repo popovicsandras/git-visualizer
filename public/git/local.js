@@ -20,6 +20,12 @@ function assertBranchName(name) {
   if (!isValidBranchName(name)) throw new GitError(`fatal: '${name}' is not a valid branch name`);
 }
 
+/** A branch can be checked out in only one worktree at a time. */
+export function assertNotInOtherWorktree(w, name) {
+  const path = w.worktreeUsing(name);
+  if (path) throw new GitError(`fatal: '${name}' is already used by worktree at '${path}'`);
+}
+
 /** "Your branch is ahead of ..." lines for a local branch, or [] without an upstream. */
 export function trackingInfo(w, branch) {
   const up = w.local.upstream.get(branch);
@@ -133,6 +139,8 @@ export function branch(w, args) {
     for (const name of pos) {
       if (!l.branches.has(name)) throw new GitError(`error: branch '${name}' not found.`);
       if (name === cur) throw new GitError(`error: cannot delete branch '${name}' used by your working tree (you are on it)`);
+      const wt = w.worktreeUsing(name);
+      if (wt) throw new GitError(`error: cannot delete branch '${name}' used by worktree at '${wt}'`);
       const id = l.branches.get(name);
       const up = l.upstream.get(name);
       const mergedInto = up && l.remoteRefs.get(up) ? l.remoteRefs.get(up) : w.headId();
@@ -162,6 +170,8 @@ export function branch(w, args) {
       l.upstream.delete(from);
     }
     if (from === cur) l.head = { type: 'branch', name: to };
+    const wt = w.worktreeUsing(from);
+    if (wt) l.worktrees.get(wt).head = { type: 'branch', name: to };
     return [note(`Renamed branch '${from}' to '${to}'.`)];
   }
 
@@ -201,6 +211,9 @@ export function branch(w, args) {
   assertBranchName(name);
   if (l.branches.has(name) && !opts.force) throw new GitError(`fatal: a branch named '${name}' already exists`);
   if (l.branches.has(name) && name === cur) throw new GitError(`fatal: cannot force update the current branch.`);
+  if (l.branches.has(name) && w.worktreeUsing(name)) {
+    throw new GitError(`fatal: cannot force update the branch '${name}' used by worktree at '${w.worktreeUsing(name)}'`);
+  }
   const id = w.mustResolve(start);
   l.branches.set(name, id);
   const lines = [];
@@ -220,7 +233,8 @@ function leaveDetached(w, newId) {
   if (l.head.type !== 'detached') return [];
   const old = l.head.id;
   const keep = new Set();
-  for (const tip of [...l.branches.values(), ...l.remoteRefs.values(), newId]) {
+  const others = w.otherWorktrees().map((t) => w.worktreeHeadId(t));
+  for (const tip of [...l.branches.values(), ...l.remoteRefs.values(), ...others, newId]) {
     for (const id of w.ancestors(tip)) keep.add(id);
   }
   const lost = [...w.ancestors(old)].filter((id) => !keep.has(id)).sort((a, b) => w.commit(b).seq - w.commit(a).seq);
@@ -267,6 +281,7 @@ export function checkout(w, args, cmd = 'checkout') {
     assertBranchName(newName);
     const existed = l.branches.has(newName);
     if (existed && opts.create) throw new GitError(`fatal: a branch named '${newName}' already exists`);
+    if (existed) assertNotInOtherWorktree(w, newName);
     const start = pos[0] ?? 'HEAD';
     const id = w.mustResolve(start);
     const lines = leaveDetached(w, id);
@@ -289,6 +304,7 @@ export function checkout(w, args, cmd = 'checkout') {
 
   if (!opts.detach && l.branches.has(target)) {
     if (w.currentBranch() === target) return [out(`Already on '${target}'`), ...trackingInfo(w, target)];
+    assertNotInOtherWorktree(w, target);
     const lines = leaveDetached(w, l.branches.get(target));
     attach(w, target);
     return [...lines, out(`Switched to branch '${target}'`), ...trackingInfo(w, target)];

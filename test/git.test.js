@@ -180,3 +180,90 @@ test('layout: main stays on lane 0, columns shared across panels, lanes stable',
   const b = layout(w);
   for (const n of a.local.nodes) assert.equal(b.local.nodes.find((m) => m.id === n.id).lane, n.lane);
 });
+
+test('worktree add creates a branch in a new folder', () => {
+  const w = setup();
+  const main = w.headId();
+  ok(w, 'git worktree add -b feature ../project-feature main');
+  assert.equal(w.local.branches.get('feature'), main);
+  assert.deepEqual(w.local.worktrees.get('~/project-feature').head, { type: 'branch', name: 'feature' });
+  assert.equal(w.currentBranch(), 'main', 'the prompt stays in the main worktree');
+  assert.match(text(run(w, 'git worktree list')), /~\/project\s+\w+ \[main\]\n~\/project-feature\s+\w+ \[feature\]/);
+});
+
+test('a branch checked out in a worktree is protected', () => {
+  const w = setup();
+  ok(w, 'git worktree add -b feature ../wt');
+  for (const cmd of ['git checkout feature', 'git switch feature', 'git branch -D feature', 'git branch -f feature HEAD~1', 'git worktree add ../other feature']) {
+    const r = run(w, cmd);
+    assert.equal(r.ok, false, `${cmd} should fail`);
+    assert.match(text(r), /worktree at '~\/wt'/);
+  }
+  assert.equal(run(w, 'git worktree add -b feature ../again').ok, false, 'branch already exists');
+  assert.equal(run(w, 'git worktree add -b x ../wt').ok, false, 'folder already exists');
+  assert.equal(run(w, 'git worktree add ../main-again main').ok, false, 'main is checked out in ~/project');
+  ok(w, 'git branch -m feature renamed');
+  assert.deepEqual(w.local.worktrees.get('~/wt').head, { type: 'branch', name: 'renamed' });
+});
+
+test('worktree remove keeps the branch and supports undo', () => {
+  const w = setup();
+  ok(w, 'git worktree add -b feature ../project-feature');
+  assert.equal(run(w, 'git worktree remove .').ok, false, 'cannot remove the main worktree');
+  ok(w, 'git worktree remove project-feature');
+  assert.deepEqual([...w.local.worktrees.keys()], ['~/project']);
+  assert.ok(w.local.branches.has('feature'));
+  ok(w, 'git checkout feature');
+  ok(w, 'git checkout main', 'undo', 'undo', 'undo');
+  assert.ok(w.local.worktrees.has('~/project-feature'), 'undo restores the worktree');
+});
+
+test('detached worktree HEAD keeps commits reachable and is labelled', () => {
+  const w = setup();
+  ok(w, 'git commit', 'git worktree add --detach ../scratch HEAD', 'git reset --hard HEAD~1');
+  const tip = w.local.worktrees.get('~/scratch').head.id;
+  assert.ok(w.reachable('local').has(tip));
+  const node = layout(w).local.nodes.find((n) => n.id === tip);
+  assert.ok(node.labels.some((l) => l.type === 'worktree' && l.text === 'HEAD (scratch)'));
+});
+
+test('cd switches the active worktree and its HEAD', () => {
+  const w = setup();
+  const base = w.headId();
+  ok(w, 'git worktree add -b feature ../project-feature', 'cd ../project-feature');
+  assert.equal(w.cwd, '~/project-feature');
+  assert.equal(w.currentBranch(), 'feature');
+  assert.equal(text(run(w, 'pwd')), '~/project-feature');
+  ok(w, 'git commit -m "on feature"');
+  assert.notEqual(w.local.branches.get('feature'), base);
+  assert.equal(w.local.branches.get('main'), base, 'main did not move');
+  // main is now checked out elsewhere, so it is protected from here.
+  const r = run(w, 'git switch main');
+  assert.equal(r.ok, false);
+  assert.match(text(r), /worktree at '~\/project'/);
+  // Labels follow the prompt.
+  const labels = layout(w).local.nodes.flatMap((n) => n.labels);
+  assert.ok(labels.some((l) => l.type === 'current' && l.ref === 'feature'));
+  assert.ok(labels.some((l) => l.type === 'worktree' && l.ref === 'main'));
+  // Paths are relative to the new folder.
+  assert.equal(run(w, 'git worktree remove .').ok, false, 'cannot remove the current worktree');
+  ok(w, 'git worktree add -b other ../project-other', 'cd -');
+  assert.equal(w.cwd, '~/project');
+  assert.equal(w.currentBranch(), 'main');
+  assert.equal(run(w, 'cd project-other').ok, false, 'relative to ~/project, like a real shell');
+  ok(w, 'cd ../project-other');
+  assert.equal(w.currentBranch(), 'other');
+  assert.equal(run(w, 'cd ../nope').ok, false);
+  assert.equal(run(w, 'cd').ok, false);
+  ok(w, 'cd ../project', 'git worktree remove ../project-feature');
+  assert.ok(w.local.branches.has('feature'));
+});
+
+test('undo reverts cd', () => {
+  const w = setup();
+  ok(w, 'git worktree add -b feature ../wt', 'cd ../wt', 'git switch --detach HEAD');
+  ok(w, 'undo', 'undo');
+  assert.equal(w.cwd, '~/project');
+  assert.equal(w.currentBranch(), 'main');
+  assert.deepEqual(w.local.worktrees.get('~/wt').head, { type: 'branch', name: 'feature' });
+});
